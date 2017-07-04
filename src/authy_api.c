@@ -207,9 +207,7 @@ tokenVerifyResponseIsValid(char *pszResponse, char *pszApprovalStatus)
     json_value *approval_request;
     approval_request = get_json_object(parsed, "approval_request");
     result = get_json_string(approval_request, "status");
-    trace(INFO, __LINE__, "About to copy...\n");
     strcpy(pszApprovalStatus, result);
-    trace(INFO, __LINE__, "Copy done. Result: %s, Approval Status: %s\n", result, pszApprovalStatus);
     
     if (strcmp(result, "approved") == 0) {
       json_value_free(parsed);
@@ -291,21 +289,19 @@ doHttpRequest(char *pszResultUrl, char *pszPostFields, char *pszResponse)
 
   curl_easy_setopt(pCurl, CURLOPT_SSL_VERIFYPEER, 1L); //verify PEER certificate
   curl_easy_setopt(pCurl, CURLOPT_SSL_VERIFYHOST, 2L); //verify HOST certificate
-  curl_easy_setopt(pCurl, CURLOPT_VERBOSE, 1L);
+  curl_easy_setopt(pCurl, CURLOPT_VERBOSE, 0L);
   curl_easy_setopt(pCurl, CURLOPT_WRITEFUNCTION, curlWriter);
   curl_easy_setopt(pCurl, CURLOPT_WRITEDATA, pszResponse);
   curl_easy_setopt(pCurl, CURLOPT_USERAGENT, pszUserAgent);
 
-  trace(INFO, __LINE__, "Curl got to here....1\n");
   curlResult = (int) curl_easy_perform(pCurl);
-  trace(INFO, __LINE__, "Curl got to here....2\n");
   if(0 != curlResult) {
     trace(ERROR, __LINE__, "Curl failed with code %d", curlResult);
     r = FAIL;
     goto EXIT;
   }
 
-  trace(INFO, __LINE__, "[Authy] Curl response: Body=%s\n", pszResponse);
+  trace(DEBUG, __LINE__, "[Authy] Curl response: Body=%s\n", pszResponse);
 
   r = OK;
 
@@ -424,7 +420,7 @@ requestOnetouch(const char *pszApiUrl,
 
   if(FALSE == tokenResponseIsValid(pszResponse))
   {
-    trace(ERROR, __LINE__, "Response does not include 'token': 'is valid'. Invalid token assumed.");
+    trace(ERROR, __LINE__, "[Authy] Response does not include 'success': true. Invalid token assumed.");
     r = FAIL;
     goto EXIT;
   }
@@ -475,7 +471,6 @@ verifyOnetouch(const char *pszApiUrl,
   }
 
   r = doHttpRequest(pszRequestUrl, pszNullPost, pszResponse); //GET request, postFields are NULL
-  trace(INFO, __LINE__, "[Authy] Done with request...\n");
 
   if(FAILED(r)) {
     trace(INFO, __LINE__, "[Authy] Token request verification failed.\n");
@@ -486,17 +481,14 @@ verifyOnetouch(const char *pszApiUrl,
 
   if(1 == r) // Expired or Denied
   {
-    trace(ERROR, __LINE__, "Response Denied or Expired.");
+    trace(ERROR, __LINE__, "[Authy] OneTouch Response Denied or Expired.");
     goto EXIT;
   }
 
-  trace(INFO, __LINE__, "I am here and I don't know what to do!\n");
 EXIT:
   cleanAndFree(pszRequestUrl);
   pszRequestUrl = NULL;
   cleanAndFree(pszEndPoint);
   pszEndPoint = NULL;
-
-  trace(INFO, __LINE__, "exiting...verifyOneTouch\n");
   return r;
 }

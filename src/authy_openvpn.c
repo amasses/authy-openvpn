@@ -201,7 +201,6 @@ authenticate(struct plugin_context *context,
   int iAuthResult = OPENVPN_PLUGIN_FUNC_ERROR; //auth failed
 
   RESULT r = FAIL;
-  char *pszToken = NULL;
   char *pszAuthyResponse = NULL;
   char *pszCommonName = NULL;
   char *pszUsername = NULL;
@@ -259,15 +258,7 @@ authenticate(struct plugin_context *context,
     goto EXIT;
   }
 
-  // From here we start authenticating the user token.
-  pszToken  = getEnv("password", envp);
-  if(!pszToken){
-    trace(ERROR, __LINE__, "[Authy] ERROR: Token is NULL. Marking Auth as failure.\n");
-    iAuthResult = OPENVPN_PLUGIN_FUNC_ERROR;
-    goto EXIT;
-  }
-
-  pszAuthyResponse= calloc(CURL_MAX_WRITE_SIZE + 1, sizeof(char)); //allocate memory for Authy Response
+  pszAuthyResponse = calloc(CURL_MAX_WRITE_SIZE + 1, sizeof(char)); //allocate memory for Authy Response
   if(!pszAuthyResponse){
     trace(ERROR, __LINE__, "[Authy] ERROR: Unable to allocate memory for curl response. Marking Auth as failure.\n");
     iAuthResult = OPENVPN_PLUGIN_FUNC_ERROR;
@@ -278,7 +269,6 @@ authenticate(struct plugin_context *context,
   if(TRUE == context->bPAM)
   {
     trace(INFO, __LINE__, "[Authy] Authenticating username=%s with AUTHY_ID=%s via OneTouch.\n", pszUsername, pszAuthyId);
-
     r = requestOnetouch(context->pszApiUrl,
                     pszAuthyId,
                     context->pszApiKey,
@@ -287,15 +277,14 @@ authenticate(struct plugin_context *context,
 
     trace(INFO, __LINE__, "[Authy] Guid returned=%s.\n", pszAuthyResponse);
     if (SUCCESS(r)) {
-      trace(INFO, __LINE__, "[Authy] Pausing for 5s\n", pszAuthyResponse);
+      trace(INFO, __LINE__, "[Authy] Pausing for 5s to allow for authorization\n", pszAuthyResponse);
       sleep(5);
       int timeout = 60;
       int iterations = 0;
       // Now wait for OneTouch Response...
       while (iterations < timeout) {
         iterations++;
-        trace(INFO, __LINE__, "[Authy] Pausing for 1s\n", pszAuthyResponse);
-        sleep(1);
+        sleep(5);
         RESULT verifyResult = FAIL;
         char *pszApprovalStatus = calloc(10, sizeof(char));
         char *pszAuthyVerifyResponse;
@@ -309,7 +298,6 @@ authenticate(struct plugin_context *context,
                                        pszApprovalStatus);
                                        trace(INFO, __LINE__, "Approval status: %s\n", pszApprovalStatus);
 
-        trace(INFO, __LINE__, "REsult: %s, status: %d\n", pszAuthyVerifyResponse, verifyResult);
         if (verifyResult != 1 && strcmp(pszApprovalStatus, "approved") == 0){
           iAuthResult = OPENVPN_PLUGIN_FUNC_SUCCESS; //Two-Factor Auth was succesful
           goto EXIT;
@@ -325,7 +313,6 @@ authenticate(struct plugin_context *context,
 EXIT:
 
 	if(pszAuthyId) {cleanAndFree(pszAuthyId);}
-  if(pszToken) { memset(pszToken, 0, (strlen(pszToken))); } // Cleanup the token. Password is left untouch.
   if(pszAuthyResponse) { cleanAndFree(pszAuthyResponse);};
 
   if(iAuthResult == OPENVPN_PLUGIN_FUNC_SUCCESS){
