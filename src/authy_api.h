@@ -37,15 +37,15 @@ verifyToken(const char *pszApiUrl,
             const char *pszApiKey,
             char *pszResponse);
 
+extern RESULT
+requestOnetouch(const char *pszApiUrl,
+            char *pszAuthyId,
+            const char *pszApiKey,
+            char *pszResponse);
 
 extern RESULT
-sms(const char *pszApiUrl,
-          char *pszAuthyId,
-          const char *pszApiKey,
-          char *pszResponse);
-
-extern RESULT
-call(const char *pszApiUrl,
-          char *pszAuthyId,
-          const char *pszApiKey,
-          char *pszResponse);
+verifyOnetouch(const char *pszApiUrl,
+            char *pszGuid,
+            const char *pszApiKey,
+            char *pszResponse,
+            char *pszApprovalStatus);

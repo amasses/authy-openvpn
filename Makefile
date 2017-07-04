@@ -30,9 +30,8 @@ INSTDIR=/usr/lib/authy
 _OBJS = $(addsuffix .o, $(notdir $(basename $(wildcard $(SDIR)/*.c))))
 OBJS = $(patsubst %,$(BUILD_DIR)/%,$(_OBJS))
 
-_JSMN_OBJS = $(addsuffix .o, $(notdir $(basename $(wildcard $(SDIR)/vendor/jsmn/*.c))))
-JSMN_OBJS = $(patsubst %,$(BUILD_DIR)/vendor/%,$(_JSMN_OBJS))
-
+_JP_OBJS = $(addsuffix .o, $(notdir $(basename $(wildcard $(SDIR)/vendor/json-parser/*.c))))
+JP_OBJS = $(patsubst %,$(BUILD_DIR)/vendor/%,$(_JP_OBJS))
 
 all: $(BUILD_DIR)/$(LIBNAME).so
 
@@ -41,16 +40,16 @@ $(BUILD_DIR)/%.o: $(SDIR)/%.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) $(OBJFLAGS) -o $@ $<
 
-#build vendor jsmn module. We need to duplicate the rule above as it's not possible
+#build vendor json module. We need to duplicate the rule above as it's not possible
 # to use 2 patterns as pre-requisites in 1 rules.
-$(BUILD_DIR)/vendor/%.o: $(SDIR)/vendor/jsmn/%.c
+$(BUILD_DIR)/vendor/%.o: $(SDIR)/vendor/json-parser/%.c
 	mkdir -p $(BUILD_DIR)/vendor
 	$(CC) $(CFLAGS) $(OBJFLAGS) -o $@ $<
 
 # Make Authy shared Lib.
-$(BUILD_DIR)/$(LIBNAME).so: $(OBJS) $(JSMN_OBJS)
+$(BUILD_DIR)/$(LIBNAME).so: $(OBJS) $(JP_OBJS)
 	@# MAC SUPER dylib compile gcc -dynamiclib	-Wl,-headerpad_max_install_names,-undefined,dynamic_lookup,-compatibility_version,1.0,-current_version,1.0,-install_name,/usr/local/lib/lib$(OBJ).1.dylib	-o lib$(OBJ).1.dylib $(OBJ).o
-	$(CC) $(CFLAGS) $(LIBFLAGS),$(LIBNAME).so -o $@ $^ -lc -lcurl
+	$(CC) $(CFLAGS) $(LIBFLAGS),$(LIBNAME).so -o $@ $^ -lc -lcurl -lm
 
 
 # $(DESTDIR) is used by debian makefiles

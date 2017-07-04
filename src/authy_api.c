@@ -30,8 +30,7 @@
 #include "logger.h"
 #include "authy_api.h"
 #include "constants.h"
-
-#include "vendor/jsmn/jsmn.h"
+#include "json_parse.h"
 
 #ifdef WIN32
 #define snprintf _snprintf
@@ -167,28 +166,62 @@ curlWriter(char *ptr,
 BOOL
 tokenResponseIsValid(char *pszResponse)
 {
-  int cnt;
-  jsmn_parser parser;
-  jsmn_init(&parser);
-  jsmntok_t tokens[20] = {{0}};
-  jsmn_parse(&parser, pszResponse, tokens, 20);
+  json_value *parsed;
+  parsed = json_parse((json_char*)pszResponse, strlen(pszResponse));
 
-  /* success isn't always on the same place, look until 19 because it
-     shouldn't be the last one because it won't be a key */
-  for (cnt = 0; cnt < 19; cnt++)
-  {
-    /* avoid matching empty strings since "" == "" */
-    int len = (tokens[cnt]).end - (tokens[cnt]).start;
-    if(len > 0 && strncmp(pszResponse + (tokens[cnt]).start, "token", len) == 0)
-    {
-      if(strncmp(pszResponse + (tokens[cnt+1]).start, "is valid", (tokens[cnt+1]).end - (tokens[cnt+1]).start) == 0){
-        return TRUE;
-      } else {
-        return FALSE;
-      }
+  if (get_json_boolean(parsed, "success")) {
+    json_value_free(parsed);
+    return TRUE;
+  }
+
+  json_value_free(parsed);
+	return FALSE;
+}
+
+char* getGuid(char *pszResponse) {
+  json_value *parsed;
+  char *guid;
+  char *result;
+
+  parsed = json_parse(pszResponse, strlen(pszResponse));
+  if (get_json_boolean(parsed, "success")) {
+    json_value *approval_request;
+    approval_request = get_json_object(parsed, "approval_request");
+    guid = get_json_string(approval_request, "uuid");
+    result = calloc(strlen(guid), sizeof(char));
+    strcpy(result, guid);
+  }
+
+  json_value_free(parsed);
+  return result;
+}
+
+uint
+tokenVerifyResponseIsValid(char *pszResponse, char *pszApprovalStatus)
+{
+  char *result;
+  json_value *parsed;
+
+  parsed = json_parse(pszResponse, strlen(pszResponse));
+  if (get_json_boolean(parsed, "success")) {
+    json_value *approval_request;
+    approval_request = get_json_object(parsed, "approval_request");
+    result = get_json_string(approval_request, "status");
+    trace(INFO, __LINE__, "About to copy...\n");
+    strcpy(pszApprovalStatus, result);
+    trace(INFO, __LINE__, "Copy done. Result: %s, Approval Status: %s\n", result, pszApprovalStatus);
+    
+    if (strcmp(result, "approved") == 0) {
+      json_value_free(parsed);
+      return 0;
+    } else if(strcmp(result, "denied") == 0 || strcmp(result, "expired") == 0) {
+      json_value_free(parsed);
+      return 1;
     }
   }
-	return FALSE;
+
+  json_value_free(parsed);
+  return -1;
 }
 
 //
@@ -217,6 +250,7 @@ doHttpRequest(char *pszResultUrl, char *pszPostFields, char *pszResponse)
   CURL *pCurl = NULL;
   int curlResult = -1;
   char *pszUserAgent = NULL;
+  struct curl_slist *headers = NULL;
 
   pszUserAgent = getUserAgent();
   if(NULL == pszUserAgent)
@@ -252,6 +286,9 @@ doHttpRequest(char *pszResultUrl, char *pszPostFields, char *pszResponse)
   curl_easy_setopt(p_curl, CURLOPT_CAINFO, "curl-bundle-ca.crt");
 #endif
 
+  headers = curl_slist_append(headers, "Connection: close");
+  curl_easy_setopt(pCurl, CURLOPT_HTTPHEADER, headers);
+
   curl_easy_setopt(pCurl, CURLOPT_SSL_VERIFYPEER, 1L); //verify PEER certificate
   curl_easy_setopt(pCurl, CURLOPT_SSL_VERIFYHOST, 2L); //verify HOST certificate
   curl_easy_setopt(pCurl, CURLOPT_VERBOSE, 1L);
@@ -259,7 +296,9 @@ doHttpRequest(char *pszResultUrl, char *pszPostFields, char *pszResponse)
   curl_easy_setopt(pCurl, CURLOPT_WRITEDATA, pszResponse);
   curl_easy_setopt(pCurl, CURLOPT_USERAGENT, pszUserAgent);
 
+  trace(INFO, __LINE__, "Curl got to here....1\n");
   curlResult = (int) curl_easy_perform(pCurl);
+  trace(INFO, __LINE__, "Curl got to here....2\n");
   if(0 != curlResult) {
     trace(ERROR, __LINE__, "Curl failed with code %d", curlResult);
     r = FAIL;
@@ -281,6 +320,7 @@ EXIT:
 #else
   if(pCurl){
     curl_easy_cleanup(pCurl);
+    curl_slist_free_all(headers);
   }
 #endif
 
@@ -342,49 +382,29 @@ EXIT:
   return r;
 }
 
-
-
-//
-// Description
-//
-// Calls the verify Authy API using force=true
-//
-// Does a GET to https://api.authy.com/protected/{FORMAT}/verify/{TOKEN}/{AUTHY_ID}?force=true&api_key={KEY}
-// Parameters
-//
-// pszApiUrl      - The server URL
-// pszToken       - The token entered by the user
-// pszAuthyId     - The Authy ID fo the user
-// pszApiKey      - The Authy API key
-// pszResponse    - Pointer to where the response will be stored.
-//
-// Returns
-//
-// Standard RESULT
-//
 extern RESULT
-verifyToken(const char *pszApiUrl,
-            char *pszToken,
+requestOnetouch(const char *pszApiUrl,
             char *pszAuthyId,
             const char *pszApiKey,
-            char *pszResponse)
-{
+            char *pszResponse) {
+              
   RESULT r = FAIL;
   size_t endPointSize = 0;
-  char *pszResultUrl = NULL;
+  char *pszRequestUrl = NULL;
   char *pszEndPoint = NULL;
-  char *pszParams = "?force=true&api_key=";
+  char *pszNullPost = "";
+  char *pszParams = "?seconds_to_expire=60&message=Please+Authorize+VPN+Access&api_key=";
 
-  endPointSize = strlen("/verify/") + strlen(pszToken) + strlen("/") + strlen(pszAuthyId) + 1;
+  endPointSize = strlen("/onetouch/json/users/") + strlen("/approval_requests") + strlen(pszAuthyId) + 1;
   pszEndPoint = calloc(endPointSize, sizeof(char));
   if(!pszEndPoint){
     r = FAIL;
     goto EXIT;
   }
 
-  snprintf(pszEndPoint, endPointSize, "/verify/%s/%s", pszToken, pszAuthyId);
+  snprintf(pszEndPoint, endPointSize, "/onetouch/json/users/%s/approval_requests", pszAuthyId);
 
-  r = buildUrl(&pszResultUrl,
+  r = buildUrl(&pszRequestUrl,
                pszApiUrl,
                pszEndPoint,
                pszParams,
@@ -395,7 +415,7 @@ verifyToken(const char *pszApiUrl,
     goto EXIT;
   }
 
-  r = doHttpRequest(pszResultUrl, NULL, pszResponse); //GET request, postFields are NULL
+  r = doHttpRequest(pszRequestUrl, pszNullPost, pszResponse); //GET request, postFields are NULL
 
   if(FAILED(r)) {
     trace(INFO, __LINE__, "[Authy] Token request verification failed.\n");
@@ -409,167 +429,74 @@ verifyToken(const char *pszApiUrl,
     goto EXIT;
   }
 
+  char *guid = getGuid(pszResponse); // Replace the raw response with the GUID for checking later...
+  strcpy(pszResponse, guid);
 EXIT:
-  cleanAndFree(pszResultUrl);
-  pszResultUrl = NULL;
+  cleanAndFree(pszRequestUrl);
+  pszRequestUrl = NULL;
   cleanAndFree(pszEndPoint);
   pszEndPoint = NULL;
 
   return r;
 }
 
-
-///
-// Description
-//
-// Calls the request SMS Authy API.
-//
-//
-// Parameters
-//
-// pszApiUrl      - The server URL
-// pszAuthyId     - The Authy ID fo the user
-// pszVia         - This is the way, either 'call' or 'sms'
-// pszApiKey      - The Authy API key
-// pszResponse    - Pointer to where the response will be stored.
-//
-// Returns
-//
-// Standard RESULT
-//
-extern RESULT
-sendTokenToUser(const char *pszApiUrl,
-            char *pszAuthyId,
-            char *pszVia,
+extern int
+verifyOnetouch(const char *pszApiUrl,
+            char *pszGuid,
             const char *pszApiKey,
-            char *pszResponse)
-{
-  int r = FAIL;
+            char *pszResponse,
+            char *pszApprovalStatus) {
+
+  int r = -1;
   size_t endPointSize = 0;
-  char *pszResultUrl = NULL;
+  char *pszRequestUrl = NULL;
   char *pszEndPoint = NULL;
+  char *pszNullPost = NULL;
   char *pszParams = "?api_key=";
 
-  // /call/1 or /sms/1. Including the 2 slashes.
-  endPointSize = 2 + strlen(pszVia) + strlen(pszAuthyId) + 1;
+  endPointSize = strlen("/onetouch/json/") + strlen("/approval_requests/") + strlen(pszGuid) + 1;
   pszEndPoint = calloc(endPointSize, sizeof(char));
-  if(NULL == pszEndPoint){
-    r = OUT_OF_MEMORY;
+  if(!pszEndPoint){
+    r = FAIL;
     goto EXIT;
   }
 
-  snprintf(pszEndPoint, endPointSize, "/%s/%s", pszVia, pszAuthyId);
-  r = buildUrl(&pszResultUrl,
+  snprintf(pszEndPoint, endPointSize, "/onetouch/json/approval_requests/%s", pszGuid);
+
+  r = buildUrl(&pszRequestUrl,
                pszApiUrl,
                pszEndPoint,
                pszParams,
                pszApiKey);
 
   if(FAILED(r)) {
-    r = FAIL;
+    trace(INFO, __LINE__, "[Authy] URL for Token verification failed\n");
     goto EXIT;
   }
 
-  trace(INFO, __LINE__, "[Authy] Requesting %sfor Authy ID\n", pszVia, pszAuthyId);
-  r = doHttpRequest(pszResultUrl, NULL, pszResponse);
+  r = doHttpRequest(pszRequestUrl, pszNullPost, pszResponse); //GET request, postFields are NULL
+  trace(INFO, __LINE__, "[Authy] Done with request...\n");
 
+  if(FAILED(r)) {
+    trace(INFO, __LINE__, "[Authy] Token request verification failed.\n");
+    goto EXIT;
+  }
+
+  r = tokenVerifyResponseIsValid(pszResponse, pszApprovalStatus);
+
+  if(1 == r) // Expired or Denied
+  {
+    trace(ERROR, __LINE__, "Response Denied or Expired.");
+    goto EXIT;
+  }
+
+  trace(INFO, __LINE__, "I am here and I don't know what to do!\n");
 EXIT:
-  cleanAndFree(pszResultUrl);
-  pszResultUrl = NULL;
+  cleanAndFree(pszRequestUrl);
+  pszRequestUrl = NULL;
   cleanAndFree(pszEndPoint);
   pszEndPoint = NULL;
 
+  trace(INFO, __LINE__, "exiting...verifyOneTouch\n");
   return r;
 }
-
-///
-// Description
-//
-// Calls the request SMS Authy API.
-//
-//
-// Parameters
-//
-// pszApiUrl      - The server URL
-// pszAuthyId     - The Authy ID fo the user
-// pszApiKey      - The Authy API key
-// pszResponse    - Pointer to where the response will be stored.
-//
-// Returns
-//
-// Standard RESULT
-//
-extern RESULT
-sms(const char *pszApiUrl,
-          char *pszAuthyId,
-    const char *pszApiKey,
-          char *pszResponse)
-{
-  int r = FAIL;
-
-  char *pszVia = "sms";
-  r = sendTokenToUser(pszApiUrl,
-                      pszAuthyId,
-                      pszVia,
-                      pszApiKey,
-                      pszResponse);
-
-  if (FAILED(r)){
-    trace(ERROR, __LINE__, "[AUTHY] Error sendingsms token to user\n");
-    r = FAIL;
-    goto EXIT;
-  }
-
-  r = OK;
-
-EXIT:
-  return r;
-}
-
-
-///
-// Description
-//
-// Calls the request call Authy API.
-//
-//
-// Parameters
-//
-// pszApiUrl      - The server URL
-// pszAuthyId     - The Authy ID fo the user
-// pszApiKey      - The Authy API key
-// pszResponse    - Pointer to where the response will be stored.
-//
-// Returns
-//
-// Standard RESULT
-//
-extern RESULT
-call(const char *pszApiUrl,
-            char *pszAuthyId,
-            const char *pszApiKey,
-            char *pszResponse)
-{
-  int r = FAIL;
-
-  char *pszVia = "call";
-  r = sendTokenToUser(pszApiUrl,
-                      pszAuthyId,
-                      pszVia,
-                      pszApiKey,
-                      pszResponse);
-
-  if (FAILED(r)){
-    trace(ERROR, __LINE__, "[AUTHY] Error trying to call the user\n");
-    r = FAIL;
-    goto EXIT;
-  }
-
-  r = OK;
-
-EXIT:
-  return r;
-}
-
-
-

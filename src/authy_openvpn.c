@@ -12,11 +12,9 @@
 #endif
 
 #include <stdarg.h>
+#include <unistd.h>
 #include <assert.h>
 #include <curl/curl.h>
-
-
-#include "vendor/jsmn/jsmn.h"
 
 #include "openvpn-plugin.h"
 #include "authy_conf.h"
@@ -24,11 +22,12 @@
 #include "utils.h"
 #include "logger.h"
 #include "constants.h"
+#include "json_parse.h"
 
 /*
  * This state expects the following config line
  * plugin authy-openvpn.so APIURL APIKEY PAM
- * where APIURL should be something like  https://api.authy.com/protected/json
+ * where APIURL should be something like  https://api.authy.com
  * APIKEY like d57d919d11e6b221c9bf6f7c882028f9
  * PAM pam
  * pam = 1;
@@ -164,29 +163,17 @@ openvpn_plugin_open_v1(unsigned int *type_mask,
 static RESULT
 responseWasSuccessful(char *pszAuthyResponse)
 {
-  int cnt;
-  jsmn_parser parser;
-  jsmn_init(&parser);
-  jsmntok_t tokens[20];
-  jsmn_parse(&parser, pszAuthyResponse, tokens, 20);
+  json_value *parsed;
+  parsed = json_parse((json_char*)pszAuthyResponse, strlen(pszAuthyResponse));
 
-  /* success isn't always on the same place, look until 19 because it
-     shouldn't be the last one because it won't be a key */
-  for (cnt = 0; cnt < 19; ++cnt)
-  {
-    if(strncmp(pszAuthyResponse + (tokens[cnt]).start, "success", (tokens[cnt]).end - (tokens[cnt]).start) == 0)
-    {
-      if(strncmp(pszAuthyResponse + (tokens[cnt+1]).start, "true", (tokens[cnt+1]).end - (tokens[cnt+1]).start) == 0){
-        return OK;
-      } else {
-        return FAIL;
-      }
-    }
+  if (get_json_boolean(parsed, "success")) {
+    json_value_free(parsed);
+    return OK;
   }
-	return FAIL;
+
+  json_value_free(parsed);
+  return FAIL;
 }
-
-
 
 // Description
 //
@@ -287,52 +274,52 @@ authenticate(struct plugin_context *context,
     goto EXIT;
   }
 
-  // Here check if the user is trying to just request a phone call or an sms token.
-  if (0 == strcmp(pszToken, "sms")){
-
-    sms(context->pszApiUrl, pszAuthyId, context->pszApiKey, pszAuthyResponse);
-    iAuthResult = OPENVPN_PLUGIN_FUNC_ERROR; //doing sms always fails authentication
-    goto EXIT;
-  }
-  else if(0 == strcmp(pszToken, "call")){
-     call(context->pszApiUrl, pszAuthyId, context->pszApiKey, pszAuthyResponse);
-     iAuthResult = OPENVPN_PLUGIN_FUNC_ERROR; //doing phone call always fails authentication
-     goto EXIT;
-  }
-
   //PAM Authentication: password is concatenated and separated by TOKEN_PASSWORD_SEPARATOR
   if(TRUE == context->bPAM)
   {
-    pszTokenStartPosition = strrchr(pszToken, TOKEN_PASSWORD_SEPARATOR);
-    if (NULL == pszTokenStartPosition){
-      trace(ERROR, __LINE__, "[Authy] PAM being used but password was not properly concatenated. Use [PASSWORD]-[TOKEN].\n");
-      iAuthResult = OPENVPN_PLUGIN_FUNC_ERROR;
-      goto EXIT;
-    }
-		*pszTokenStartPosition = '\0'; // This 0 terminates the password so that pam gets only the password and not the token.
-    pszToken = pszTokenStartPosition + 1;
+    trace(INFO, __LINE__, "[Authy] Authenticating username=%s with AUTHY_ID=%s via OneTouch.\n", pszUsername, pszAuthyId);
+
+    r = requestOnetouch(context->pszApiUrl,
+                    pszAuthyId,
+                    context->pszApiKey,
+                    pszAuthyResponse);
+                    // pszAuthyResponse is set to the GUID of the oneTouch request
+
+    trace(INFO, __LINE__, "[Authy] Guid returned=%s.\n", pszAuthyResponse);
+    if (SUCCESS(r)) {
+      trace(INFO, __LINE__, "[Authy] Pausing for 5s\n", pszAuthyResponse);
+      sleep(5);
+      int timeout = 60;
+      int iterations = 0;
+      // Now wait for OneTouch Response...
+      while (iterations < timeout) {
+        iterations++;
+        trace(INFO, __LINE__, "[Authy] Pausing for 1s\n", pszAuthyResponse);
+        sleep(1);
+        RESULT verifyResult = FAIL;
+        char *pszApprovalStatus = calloc(10, sizeof(char));
+        char *pszAuthyVerifyResponse;
+        pszAuthyVerifyResponse = calloc(CURL_MAX_WRITE_SIZE + 1, sizeof(char)); //allocate memory for Authy Response
+
+        trace(INFO, __LINE__, "[Authy] Verifying OneTouch response for Guid %s\n", pszAuthyResponse);
+        verifyResult = verifyOnetouch(context->pszApiUrl,
+                                       pszAuthyResponse,
+                                       context->pszApiKey,
+                                       pszAuthyVerifyResponse,
+                                       pszApprovalStatus);
+                                       trace(INFO, __LINE__, "Approval status: %s\n", pszApprovalStatus);
+
+        trace(INFO, __LINE__, "REsult: %s, status: %d\n", pszAuthyVerifyResponse, verifyResult);
+        if (verifyResult != 1 && strcmp(pszApprovalStatus, "approved") == 0){
+          iAuthResult = OPENVPN_PLUGIN_FUNC_SUCCESS; //Two-Factor Auth was succesful
+          goto EXIT;
+        } else if (verifyResult == 1) {
+          iAuthResult = OPENVPN_PLUGIN_FUNC_ERROR;
+          goto EXIT;
+        }
+      }
+    }     
   }
-
-  if(FALSE == isTokenSafe(pszToken))
-  {
-    trace(ERROR, __LINE__, "[Authy] Token is not safe. Aborting.\n");
-    iAuthResult = OPENVPN_PLUGIN_FUNC_ERROR;
-    goto EXIT;
-  }
-
-  trace(INFO, __LINE__, "[Authy] Authenticating username=%s, token=%s with AUTHY_ID=%s.\n", pszUsername, pszToken, pszAuthyId);
-
-  r = verifyToken(context->pszApiUrl,
-                  pszToken,
-                  pszAuthyId,
-                  context->pszApiKey,
-                  pszAuthyResponse);
-
-  if (SUCCESS(r) && SUCCESS(responseWasSuccessful(pszAuthyResponse))){
-    iAuthResult = OPENVPN_PLUGIN_FUNC_SUCCESS; //Two-Factor Auth was succesful
-    goto EXIT;
-  }
-
   iAuthResult = OPENVPN_PLUGIN_FUNC_ERROR;
 
 EXIT:
