@@ -382,14 +382,22 @@ extern RESULT
 requestOnetouch(const char *pszApiUrl,
             char *pszAuthyId,
             const char *pszApiKey,
-            char *pszResponse) {
+            char *pszResponse,
+            char *pszConnectFrom,
+            char *pszUsername) {
               
   RESULT r = FAIL;
   size_t endPointSize = 0;
+  size_t paramsSize = 0;
   char *pszRequestUrl = NULL;
   char *pszEndPoint = NULL;
   char *pszNullPost = "";
-  char *pszParams = "?seconds_to_expire=60&message=Please+Authorize+VPN+Access&api_key=";
+  
+  char *pszParams = NULL;
+  
+  paramsSize = (strlen("?seconds_to_expire=60&message=Please+Authorize+VPN+Access&details[Username]=%s&details[Connecting+From]=%s&api_key=") - 4) + strlen(pszUsername) + strlen(pszConnectFrom) + 1;
+  pszParams = calloc(paramsSize, sizeof(char));
+  snprintf(pszParams, paramsSize, "?seconds_to_expire=60&message=Please+Authorize+VPN+Access&details[Username]=%s&details[Connecting+From]=%s&api_key=", pszUsername, pszConnectFrom);
 
   endPointSize = strlen("/onetouch/json/users/") + strlen("/approval_requests") + strlen(pszAuthyId) + 1;
   pszEndPoint = calloc(endPointSize, sizeof(char));

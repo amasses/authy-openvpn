@@ -41,7 +41,9 @@ extern RESULT
 requestOnetouch(const char *pszApiUrl,
             char *pszAuthyId,
             const char *pszApiKey,
-            char *pszResponse);
+            char *pszResponse,
+            char *pszConnectFrom,
+            char *pszUsername);
 
 extern RESULT
 verifyOnetouch(const char *pszApiUrl,

@@ -35,6 +35,7 @@
 struct plugin_context {
   char *pszApiUrl;
   char *pszApiKey;
+  char *pszConnectFrom;
   int bPAM;
   int verbosity;
 };
@@ -204,6 +205,7 @@ authenticate(struct plugin_context *context,
   char *pszAuthyResponse = NULL;
   char *pszCommonName = NULL;
   char *pszUsername = NULL;
+  char *pszConnectFrom = NULL;
   char *pszAuthyId = NULL;
   char *pszWantedCommonName = NULL;
   char *pszTokenStartPosition = NULL;
@@ -268,11 +270,14 @@ authenticate(struct plugin_context *context,
   //PAM Authentication: password is concatenated and separated by TOKEN_PASSWORD_SEPARATOR
   if(TRUE == context->bPAM)
   {
+    pszConnectFrom = getEnv("untrusted_ip", envp);
     trace(INFO, __LINE__, "[Authy] Authenticating username=%s with AUTHY_ID=%s via OneTouch.\n", pszUsername, pszAuthyId);
     r = requestOnetouch(context->pszApiUrl,
                     pszAuthyId,
                     context->pszApiKey,
-                    pszAuthyResponse);
+                    pszAuthyResponse,
+                    pszConnectFrom,
+                    pszUsername);
                     // pszAuthyResponse is set to the GUID of the oneTouch request
 
     trace(INFO, __LINE__, "[Authy] Guid returned=%s.\n", pszAuthyResponse);
