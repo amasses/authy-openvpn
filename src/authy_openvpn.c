@@ -284,11 +284,11 @@ authenticate(struct plugin_context *context,
     if (SUCCESS(r)) {
       trace(INFO, __LINE__, "[Authy] Pausing for 5s to allow for authorization\n", pszAuthyResponse);
       sleep(5);
-      int timeout = 60;
+      int timeout = 300;
       int iterations = 0;
       // Now wait for OneTouch Response...
       while (iterations < timeout) {
-        iterations++;
+        iterations += 5;
         sleep(5);
         RESULT verifyResult = FAIL;
         char *pszApprovalStatus = calloc(10, sizeof(char));
